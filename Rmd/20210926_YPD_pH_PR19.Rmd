@@ -1,0 +1,334 @@
+---
+title: "Plate Reader 19: YPD pH 4, 5.5, 7, 8.5 and without HEPES"
+author: "Liz Hughes"
+date: "26-09-21"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 2
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+  word_document:
+    toc: yes
+    toc_depth: '2'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE, message = FALSE, echo = TRUE, cache = FALSE,
+  results = "show"
+)
+```
+
+#Plate reader assay.
+
+Set up to test growth of WT, Gat201 Madhani deletion and Gat201 complemented strains (C26 and C30) in YPD (NA) and YPD + 20mM HEPES at pH= 4 (4), pH=5.5 (5.5), pH = 7 (7) and pH = 8.5 (8.5) at 37 degrees.
+3 Biorep each: 3 WT Strains (KN99-alpha), Madhani Gat201 deletion mutant and Gat201-complemented strains 26and 30.
+Grow 5ml culture from colony (1 colony = 1 Biorep)in YPD, 30C, 200 rpm ON.
+Seed at OD 600nm = 0.2; 200 ul per well.
+Run for 432 cycles.
+
+
+
+```{r load libraries}
+library("reshape2")
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(markdown)
+library(RColorBrewer)
+
+
+```
+
+
+
+# Read in transposed data as csv file
+
+
+```{r Load transposed data}
+rawdata <- read.csv("../Input/20210926_YPD_pH_TRS.csv")
+
+#view(rawdata)
+```
+
+# Change time in seconds to time in hours
+
+```{r Mutate time to hours}
+
+ rawdata_hrs<-mutate(rawdata, Time = Time/3600)
+
+```
+
+# Tidy the data using the melt function from reshape2
+
+```{r Tidy data}
+reshaped <- melt(rawdata_hrs, id=c("Time", "Temp"), variable.name="Well",
+                 value.name="OD595")
+
+
+summary(reshaped)
+```
+
+# Read in the Plate map data from csv file
+
+```{r read in platemap file}
+
+platemap <- read.csv("../Input/20210926_PR19_YPD_pH_Setup.csv")
+head(platemap, n=10)
+
+
+```
+
+
+# Combine the reshaped data with the plate map, pairing them by Well
+
+```{r combine the data file and platemap file}
+annotated <- inner_join(reshaped, platemap, by="Well")
+ 
+#View(annotated)
+
+```
+
+
+#Plot all ODs unnormalised
+
+## Do this as check on the data by strain and medium
+
+```{r plot_all_ODs}
+
+ggplot(data=annotated, aes(x=Time, y=OD595, color=Strain, group = Well)) + 
+       geom_line() + 
+       theme_bw()+
+       facet_grid(pH ~ .) +
+       labs(x="Time (hrs)", y="Absorbance at 595 nm")
+```
+
+#Plot all ODs by Medium, unnormalised
+
+## This allows you to check the data by pH
+
+```{r plot_all_ODs_bypH}
+
+ggplot(data=annotated, aes(x=Time, y=OD595, color=pH, group=Well)) + 
+       geom_line() + 
+       theme_bw()+
+       facet_wrap(Strain ~ .) +
+       labs(x="Time (hrs)", y="Absorbance at 595 nm")
+```
+
+# Which wells grow to higher OD?
+
+## This helps you to pinpoint any outliers or odd wells with a much higher OD.
+
+```{r find_wells_highOD}
+
+annotated %>%
+  group_by(Well) %>% 
+  summarise(maxOD=max(OD595)) %>%
+  arrange(desc(maxOD))
+```
+
+
+
+# How stable are ODs of blank wells, to use for normalisation?
+
+```{r plot_blank_ODs}
+
+ggplot(data=filter(annotated,Strain=="", pH=="8.5"), 
+       aes(x=Time, y=OD595, color=Strain, group = Well)) + 
+       geom_line() + 
+       theme_bw()+
+       labs(x="Time (hrs)", y="Absorbance at 595 nm")
+```
+
+These are fairly very stable.
+Check for individual wells that look strange.
+
+```{r plot_individual_blank_wells}
+
+ggplot(data=filter(annotated,Well=="H9"), 
+       aes(x=Time, y=OD595, color=Strain, group = Well)) + 
+       geom_line() + 
+       theme_bw()+
+       labs(x="Time (hrs)", y="Absorbance at 595 nm")
+
+```
+Remove well  H1 from the analysis.
+Remove well  F12 from the analysis.
+Remove well  H9 from the analysis.
+
+
+# Calculate median OD for blank wells to use to normalise data.
+
+
+```{r calc_blank_medians}
+blank_OD_summary <- annotated %>%
+  filter(Strain=="") %>%
+  filter(Well!= "H1") %>%
+  filter(Well!= "F12") %>%
+  filter(Well!= "H9") %>%
+  group_by(pH) %>%
+  summarise(OD_median=median(OD595),
+            OD_mean=mean(OD595),
+            OD_max=max(OD595),
+            OD_min=min(OD595))
+print(blank_OD_summary)
+```
+
+# Subtract blank OD to make corrected OD and Plot OD_corrected v Time (hrs)
+## Normalize data
+
+```{r subtract_blank_OD by pH}
+
+normalisedOD <- annotated %>%
+  left_join(blank_OD_summary, by="pH") %>%
+  mutate(OD_corrected = OD595 - OD_median)
+
+#view(normalisedOD)
+```
+
+
+
+#Plot all OD corrected (or normalized)
+
+```{r plot_all_OD_corrected}
+
+ggplot(data=filter(normalisedOD,Strain !=""),  aes(x=Time, y=OD_corrected, color=Strain, group = Well)) + 
+       geom_line() + 
+       facet_grid(pH ~ .) +
+       theme_bw()+
+       labs(x = "Time(Hrs)") +
+       labs(y = "Absorbance 595nm")
+```
+
+
+
+# Plot for All strains
+
+```{r plot_all_OD_corrected for all wrap}
+
+ggplot(data=normalisedOD %>%
+         filter(Strain != ""),
+       aes(Time, OD_corrected, colour = Strain, group = Well)) + 
+       geom_line() + 
+       geom_hline(aes(yintercept=0.5), linetype="dotted", colour="black") +
+      
+       theme_bw() +
+        scale_y_continuous(limits=c(0,0.5),expand=c(0,0)) +
+        labs(x = "Time(Hrs)") +
+        labs(y = "Absorbance 595nm") +
+      theme(text = element_text(size = 10))
+
+```
+
+```{r select strains}
+strain <- filter(normalisedOD, Strain == "KN99a" )
+
+strain2 <-  filter(normalisedOD, Strain == "Gat201-M" )
+
+strain_all <- bind_rows(strain, strain2) 
+
+summary(strain_all)
+
+```
+
+
+```{r plot stain_all}
+
+ggplot(data=strain_all ,
+       aes(Time, OD_corrected, colour = Strain, group = Well)) + 
+       geom_line() + 
+       geom_hline(aes(yintercept=0.55), linetype="dotted", colour="black") +
+   geom_hline(aes(yintercept=0.01), linetype="dotted", colour="black") +
+      facet_wrap(pH ~ .)+
+       theme_bw() +
+        scale_y_continuous(limits=c(0,0.75),expand=c(0,0)) +
+        
+        labs(x = "Time(Hrs)") +
+        labs(y = "Absorbance 595nm") +
+        labs(title = "Growth in YPD at different pH")+
+      theme(text = element_text(size = 20), line = element_line(brewer.pal(2, "Set1")))
+```
+
+
+
+
+# Plot for individual strains
+
+```{r plot_all_OD_corrected KN99a}
+
+ggplot(data=normalisedOD %>%
+         filter(Strain == "KN99a"),
+         aes(Time, OD_corrected, group = Well, colour = as.factor (pH))) + 
+         geom_line() +
+         geom_hline(aes(yintercept=0.1), linetype="dotted", colour="black") +
+          geom_hline(aes(yintercept=0.2), linetype="dotted", colour="black") +
+         theme_bw() +
+         scale_y_continuous(limits=c(0,0.75),expand=c(0,0)) +
+         labs(x = "Time(Hrs)") +
+         labs(y = "Absorbance 595nm") +
+         labs(title = "KN99alpha") +
+         theme(text = element_text(size = 10))+
+         scale_color_brewer(palette="Set1")
+
+   
+```
+
+```{r plot_all_OD_corrected Gat201-M}
+
+ggplot(data=normalisedOD %>%
+         filter(Strain == "Gat201-M"),
+         aes(Time, OD_corrected, group = Well, colour = as.factor (pH))) + 
+         geom_line() +
+         geom_hline(aes(yintercept=0.1), linetype="dotted", colour="black") +
+          geom_hline(aes(yintercept=0.2), linetype="dotted", colour="black") +
+         theme_bw() +
+         scale_y_continuous(limits=c(0,0.75),expand=c(0,0)) +
+         labs(x = "Time(Hrs)") +
+         labs(y = "Absorbance 595nm") +
+         labs(title = "Gat201-M") +
+         theme(text = element_text(size = 10))+
+         scale_color_brewer(palette="Set1")
+
+   
+```
+
+```{r plot_all_OD_corrected C26}
+
+ggplot(data=normalisedOD %>%
+         filter(Strain == "C26"),
+         aes(Time, OD_corrected, group = Well, colour = as.factor (pH))) + 
+         geom_line() +
+         geom_hline(aes(yintercept=0.1), linetype="dotted", colour="black") +
+          geom_hline(aes(yintercept=0.2), linetype="dotted", colour="black") +
+         theme_bw() +
+         scale_y_continuous(limits=c(0,0.75),expand=c(0,0)) +
+         labs(x = "Time(Hrs)") +
+         labs(y = "Absorbance 595nm") +
+         labs(title = "C26") +
+         theme(text = element_text(size = 10))+
+         scale_color_brewer(palette="Set1")
+
+   
+```
+
+```{r plot_all_OD_corrected C30}
+
+ggplot(data=normalisedOD %>%
+         filter(Strain == "C30"),
+         aes(Time, OD_corrected, group = Well, colour = as.factor (pH))) + 
+         geom_line() +
+         geom_hline(aes(yintercept=0.1), linetype="dotted", colour="black") +
+          geom_hline(aes(yintercept=0.2), linetype="dotted", colour="black") +
+         theme_bw() +
+         scale_y_continuous(limits=c(0,0.75),expand=c(0,0)) +
+         labs(x = "Time(Hrs)") +
+         labs(y = "Absorbance 595nm") +
+         labs(title = "C30") +
+         theme(text = element_text(size = 10))+
+         scale_color_brewer(palette="Set1")
+
+   
+```
